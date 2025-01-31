@@ -70,28 +70,63 @@ Clarinet.test({
 });
 
 Clarinet.test({
-  name: "Test financial tip management",
+  name: "Test rewards system",
   async fn(chain: Chain, accounts: Map<string, Account>) {
-    const deployer = accounts.get('deployer')!;
+    const wallet1 = accounts.get('wallet_1')!;
     
-    // Add tip
-    let block = chain.mineBlock([
-      Tx.contractCall('finfolio', 'add-financial-tip', [
-        types.utf8("Save 20% of your income"),
-        types.ascii("Savings")
-      ], deployer.address)
+    // Claim daily reward
+    let rewardBlock = chain.mineBlock([
+      Tx.contractCall('finfolio', 'claim-daily-rewards', [], wallet1.address)
     ]);
     
-    block.receipts[0].result.expectOk();
+    rewardBlock.receipts[0].result.expectOk();
     
-    // Read tip
-    let tip = chain.callReadOnlyFn(
+    // Verify rewards
+    let rewards = chain.callReadOnlyFn(
       'finfolio',
-      'get-tip',
-      [types.uint(0)],
-      deployer.address
+      'get-user-rewards',
+      [types.principal(wallet1.address)],
+      wallet1.address
     );
     
-    assertEquals(tip.result.expectSome().content, "Save 20% of your income");
+    let userRewards = rewards.result.expectOk();
+    assertEquals(userRewards.points, types.uint(10)); // DAILY-BONUS
+    assertEquals(userRewards.streak, types.uint(1));
+  },
+});
+
+Clarinet.test({
+  name: "Test goal completion rewards",
+  async fn(chain: Chain, accounts: Map<string, Account>) {
+    const wallet1 = accounts.get('wallet_1')!;
+    
+    // Create goal
+    chain.mineBlock([
+      Tx.contractCall('finfolio', 'create-savings-goal', [
+        types.uint(1000),
+        types.uint(1640995200)
+      ], wallet1.address)
+    ]);
+    
+    // Complete goal
+    let completionBlock = chain.mineBlock([
+      Tx.contractCall('finfolio', 'update-goal-progress', [
+        types.uint(0),
+        types.uint(1000)
+      ], wallet1.address)
+    ]);
+    
+    completionBlock.receipts[0].result.expectOk();
+    
+    // Verify completion bonus
+    let rewards = chain.callReadOnlyFn(
+      'finfolio',
+      'get-user-rewards',
+      [types.principal(wallet1.address)],
+      wallet1.address
+    );
+    
+    let userRewards = rewards.result.expectOk();
+    assertEquals(userRewards.points, types.uint(50)); // GOAL-COMPLETE-BONUS
   },
 });
