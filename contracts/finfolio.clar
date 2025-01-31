@@ -7,8 +7,9 @@
 (define-constant err-goal-exists (err u102))
 (define-constant err-invalid-amount (err u103))
 
-;; Data Variables
+;; Data Variables 
 (define-data-var tip-count uint u0)
+(define-data-var total-rewards uint u0)
 
 ;; Data Maps
 (define-map UserGoals principal (list 10 {
@@ -28,12 +29,44 @@
 
 (define-map LeaderboardScores principal uint)
 
+(define-map UserRewards principal {
+    points: uint,
+    streak: uint,
+    last-active: uint,
+    badges: (list 5 uint)
+})
+
+;; Constants for rewards
+(define-constant DAILY-BONUS uint u10)
+(define-constant STREAK-BONUS uint u5) 
+(define-constant GOAL-COMPLETE-BONUS uint u50)
+
 ;; Private Functions
 (define-private (calculate-achievement-points (current uint) (target uint))
     (let ((percentage (* (/ current target) u100)))
         (if (>= percentage u100)
             u100
             percentage)))
+
+(define-private (update-streak (user principal))
+    (let ((user-rewards (default-to {
+            points: u0,
+            streak: u0,
+            last-active: u0,
+            badges: (list)
+        } (map-get? UserRewards user))))
+        (if (is-active-yesterday? (get last-active user-rewards))
+            (map-set UserRewards user (merge user-rewards {
+                streak: (+ (get streak user-rewards) u1),
+                last-active: block-height
+            }))
+            (map-set UserRewards user (merge user-rewards {
+                streak: u1,
+                last-active: block-height
+            })))))
+
+(define-private (is-active-yesterday? (last-active uint))
+    (is-eq (- block-height last-active) u1))
 
 ;; Public Functions
 (define-public (create-savings-goal (target uint) (deadline uint))
@@ -58,10 +91,45 @@
     )
         (if (> (+ (get current goal) amount) (get target goal))
             err-invalid-amount
-            (let ((updated-goal (merge goal { current: (+ (get current goal) amount)})))
-                (ok (map-set UserGoals
-                    tx-sender
-                    (replace-at user-goals goal-id updated-goal)))))))
+            (let (
+                (updated-goal (merge goal { 
+                    current: (+ (get current goal) amount),
+                    completed: (>= (+ (get current goal) amount) (get target goal))
+                }))
+            )
+                (begin
+                    (when (get completed updated-goal)
+                        (award-goal-completion-bonus tx-sender))
+                    (ok (map-set UserGoals
+                        tx-sender
+                        (replace-at user-goals goal-id updated-goal))))))))
+
+(define-public (claim-daily-rewards)
+    (let ((rewards (default-to {
+            points: u0,
+            streak: u0,
+            last-active: u0,
+            badges: (list)
+        } (map-get? UserRewards tx-sender))))
+        (begin
+            (update-streak tx-sender)
+            (var-set total-rewards (+ (var-get total-rewards) 
+                (+ DAILY-BONUS (* (get streak rewards) STREAK-BONUS))))
+            (ok (map-set UserRewards tx-sender (merge rewards {
+                points: (+ (get points rewards) 
+                    (+ DAILY-BONUS (* (get streak rewards) STREAK-BONUS)))
+            }))))))
+
+(define-private (award-goal-completion-bonus (user principal))
+    (let ((rewards (default-to {
+            points: u0,
+            streak: u0,
+            last-active: u0,
+            badges: (list)
+        } (map-get? UserRewards user))))
+        (map-set UserRewards user (merge rewards {
+            points: (+ (get points rewards) GOAL-COMPLETE-BONUS)
+        }))))
 
 (define-public (add-financial-tip (content (string-utf8 500)) (category (string-ascii 20)))
     (if (is-eq tx-sender contract-owner)
@@ -92,3 +160,11 @@
 
 (define-read-only (get-leaderboard-score (user principal))
     (ok (default-to u0 (map-get? LeaderboardScores user))))
+
+(define-read-only (get-user-rewards (user principal))
+    (ok (default-to {
+        points: u0,
+        streak: u0,
+        last-active: u0,
+        badges: (list)
+    } (map-get? UserRewards user))))
